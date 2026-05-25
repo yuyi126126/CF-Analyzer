@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "运行程序",    // 配置名称（告诉VS Code这个配置的名字）
+            "type": "cppvsdbg",   // 调试器类型（告诉VS Code使用哪个调试器来调试程序）
+            "request": "launch",  // 请求类型（告诉VS Code这是一个启动调试会话的配置）
+            "program": "${workspaceFolder}/bin/cf-analyzer.exe",  // 可执行文件路径（告诉VS Code要调试哪个程序）
+            "args": [],           // 程序参数（告诉VS Code在调试程序时传递哪些参数）
+            "stopAtEntry": false, // 是否在程序入口处停止（告诉VS Code是否在程序的入口点停止调试）
+            "cwd": "${workspaceFolder}",    // 当前工作目录（告诉VS Code在调试程序时使用哪个目录作为当前工作目录）
+            "environment": [],    // 环境变量（告诉VS Code在调试程序时设置哪些环境变量）
+            "console": "externalTerminal"   // 控制台类型（告诉VS Code在调试程序时使用独立黑窗口来显示程序的输入和输出）
+        }
+    ]
+}

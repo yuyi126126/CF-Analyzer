@@ -1,0 +1,23 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "${workspaceFolder}/**",            // 包含工作区内所有文件的路径（告诉编译器在哪里找到项目的头文件）
+                "${vcpkgRoot}/x64-windows/include"  // 包含vcpkg安装的库的头文件路径（告诉编译器在哪里找到vcpkg安装的库的头文件）
+            ],
+            "defines": [                            // 预处理器定义（告诉编译器在编译时定义哪些宏）
+                "_DEBUG",
+                "UNICODE",
+                "_UNICODE"
+            ],
+            "windowsSdkVersion": "10.0.26100.0",
+            "compilerPath": "D:/msys2/mingw64/bin/gcc.exe",   // 编译器路径（告诉VS Code使用哪个编译器来编译代码）
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "gcc-x64",
+            "configurationProvider": "ms-vscode.makefile-tools" // 配置提供程序（告诉VS Code使用哪个扩展来提供编译器和构建系统的配置信息）
+        }
+    ],
+    "version": 4
+}
