@@ -6,8 +6,8 @@ SRCDIR = src
 INCDIR = include
 BINDIR = bin
 
-SRCS = $(SRCDIR)/main.c $(SRCDIR)/cJSON.c
-OBJS = $(BINDIR)/main.o $(BINDIR)/cJSON.o
+SRCS = $(SRCDIR)/main.c $(SRCDIR)/cJSON.c $(SRCDIR)/cf_api.c $(SRCDIR)/cf_html.c
+OBJS = $(BINDIR)/main.o $(BINDIR)/cJSON.o $(BINDIR)/cf_api.o $(BINDIR)/cf_html.o
 TARGET = $(BINDIR)/cf-analyzer.exe
 
 .PHONY: all clean run
