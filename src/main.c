@@ -82,15 +82,46 @@ int main(int argc, char* argv[]) {       // 主函数（argc: 命令行参数个
                 printf("请输入用户名: ");
                 scanf("%127s", single_handle);
                 printf("\n分析用户: %s\n", single_handle);
-                generate_user_page(single_handle, NULL, 1);
-                printf("✅ 已生成 %s.html\n", single_handle);
+                int result = generate_user_page(single_handle, NULL, 1);
+                if (result == 0) {
+                    printf("✅ 已生成 %s.html\n", single_handle);
+                }
                 printf("\n按任意键继续...");
                 getchar();      
                 getchar();
             } else if (choice == 2) {
                 printf("\n正在分析多用户数据...\n");
                 printf("这可能需要几分钟时间，请耐心等待...\n\n");
-                break;
+                FILE* in = fopen(filename, "r");
+                if (!in) {
+                    fprintf(stderr, "无法打开文件: %s\n", filename);
+                    printf("\n按任意键继续...");
+                    getchar();
+                    getchar();
+                    continue;
+                }
+                char handle[128];
+                int cnt = 0;
+                while (fscanf(in, "%127s", handle) == 1 && cnt < MAX_USERS) {
+                    printf("正在分析用户: %s...", handle);
+                    int result = generate_user_page(handle, &users[cnt], 0);
+                    if (result == 0) {
+                        printf(" ✅\n");
+                        cnt++;
+                    } else {
+                        printf("\n");
+                    }
+                }
+                fclose(in);
+                if (cnt > 0) {
+                    generate_index_page(users, cnt);
+                    printf("✅ 已生成 index.html\n");
+                } else {
+                    printf("⚠️ 没有有效的用户数据，未生成 index.html\n");
+                }
+                printf("\n按任意键继续...");
+                getchar();
+                getchar();
             } else if (choice == 3) {
                 return 0;
             } else {                             // 输入逻辑验证2（得是1、2或3）
@@ -104,10 +135,13 @@ int main(int argc, char* argv[]) {       // 主函数（argc: 命令行参数个
             print_usage(argv[0]);
             return 1;
         }
-        generate_user_page(single_handle, NULL, 1);      // 调用生成单用户页面的函数，传入用户名和单人模式标志
-        printf("✅ 已生成 %s.html\n", single_handle);
-        return 0;
+        int result = generate_user_page(single_handle, NULL, 1);      // 调用生成单用户页面的函数，传入用户名和单人模式标志
+        if (result == 0) {
+            printf("✅ 已生成 %s.html\n", single_handle);
+        }
+        return result == 0 ? 0 : 1;
     }
+    // 命令行模式直接执行多用户分析（非交互式）
     FILE* in = fopen(filename, "r");
     if (!in) {
         fprintf(stderr, "无法打开文件: %s\n", filename);
@@ -116,12 +150,15 @@ int main(int argc, char* argv[]) {       // 主函数（argc: 命令行参数个
     char handle[128];
     while (fscanf(in, "%127s", handle) == 1 && user_cnt < MAX_USERS) {
         printf("正在分析用户: %s...", handle);
-        generate_user_page(handle, &users[user_cnt], 0); // 调用生成用户页面的函数，传入用户名和用户统计信息结构体指针
-        printf(" ✅\n");
-        user_cnt++;
+        int result = generate_user_page(handle, &users[user_cnt], 0); // 调用生成用户页面的函数，传入用户名和用户统计信息结构体指针
+        if (result == 0) {
+            printf(" ✅\n");
+            user_cnt++;
+        } else {
+            printf("\n");
+        }
     }
     fclose(in);
     generate_index_page(users, user_cnt);
     printf("✅ 已生成 index.html\n");    // 说明已经生成了索引目录
-    return 0;
 }

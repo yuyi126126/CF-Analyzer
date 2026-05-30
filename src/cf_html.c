@@ -10,14 +10,15 @@
 
 // 生成用户页面函数（根据用户句柄和统计信息生成HTML页面）
 // 参数：handle - 用户句柄；stats - 用户统计信息；single_mode - 单用户模式标志（如果为1，则生成的页面不包含返回列表的链接）
-void generate_user_page(const char* handle, struct UserStats* stats, int single_mode) { 
+// 返回值：0-成功，-1-用户不存在，-2-网络错误，-3-其他错误
+int generate_user_page(const char* handle, struct UserStats* stats, int single_mode) { 
 // 第一部分：初始化CURL和内存结构体（为HTTP请求和响应数据准备环境）+ 设置CURL选项（配置HTTP请求的参数和回调函数） 
     CURL* curl = curl_easy_init();          // 初始化CURL（创建一个CURL句柄，用于执行HTTP请求）
-    if (!curl) return;
+    if (!curl) return -3;
     struct Memory mem = { malloc(1), 0 };   // 初始化内存结构体（分配初始内存并设置大小为0）
     if (!mem.data) {                        // 内存分配失败，清理CURL并返回
         curl_easy_cleanup(curl);
-        return;
+        return -3;
     }   
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);  // 设置写入回调函数（告诉CURL在接收HTTP响应数据时调用这个函数来处理数据）
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &mem);               // 设置写入数据指针（告诉CURL将HTTP响应数据传递给这个内存结构体）
@@ -27,7 +28,18 @@ void generate_user_page(const char* handle, struct UserStats* stats, int single_
     int rating = 0;
     char title[128] = "Unrated";                   // 默认头衔（如果用户没有评级，则显示为Unrated）
     char avatar_url[512] = "https://userpic.codeforces.org/no-title.jpg";
-    fetch_user_info(handle, &rating, title, avatar_url);
+    int user_info_result = fetch_user_info(handle, &rating, title, avatar_url);
+    if (user_info_result == -2) {
+        printf("❌ 用户 %s 不存在\n", handle);
+        curl_easy_cleanup(curl);
+        if (mem.data) free(mem.data);
+        return -1;
+    } else if (user_info_result == -1) {
+        printf("❌ 获取用户 %s 信息失败\n", handle);
+        curl_easy_cleanup(curl);
+        if (mem.data) free(mem.data);
+        return -2;
+    }
 // 第三部分：获取用户比赛记录（总比赛次数，近180天比赛次数，最高等级分，近180天最高等级分）
     struct Contest contests[MAX_CONTEST];
     int contest_cnt = 0; 
@@ -35,15 +47,57 @@ void generate_user_page(const char* handle, struct UserStats* stats, int single_
     int maxRating = 0, maxRating180 = 0;
     fetch_user_contests(handle, contests, &contest_cnt);
     total = contest_cnt;
+    
+    // 分析 Div 参赛和月度参赛数据
+    int div1 = 0, div2 = 0, div3 = 0, div4 = 0, other = 0;
+    int monthly_contests[12] = {0}; // 存储所有月份的参赛次数
+    time_t now = time(NULL);
+    
     for (int i = 0; i < contest_cnt; i++) {
         if (contests[i].newRating > maxRating)
             maxRating = contests[i].newRating;
-        time_t now = time(NULL);
-        if (difftime(now, contests[i].time) <= 180.0 * 24 * 3600) {   // 近180天比赛统计（如果比赛记录中有ratingUpdateTimeSeconds字段且比赛时间在当前时间的180天内，则统计近180天的比赛次数和最高等级分）
+        if (difftime(now, contests[i].time) <= 180.0 * 24 * 3600) {   // 近180天比赛统计
             last180++;
             if (contests[i].newRating > maxRating180)
                 maxRating180 = contests[i].newRating;
         }
+        
+        // 分析 Div 信息 - 根据比赛名称和选手当时rating判断
+        int is_div1 = strstr(contests[i].name, "Div. 1") || strstr(contests[i].name, "Div 1");
+        int is_div2 = strstr(contests[i].name, "Div. 2") || strstr(contests[i].name, "Div 2");
+        int is_div3 = strstr(contests[i].name, "Div. 3") || strstr(contests[i].name, "Div 3");
+        int is_div4 = strstr(contests[i].name, "Div. 4") || strstr(contests[i].name, "Div 4");
+        
+        if (is_div1 && is_div2) {
+            // 联合比赛 Div.1+Div.2，根据选手当时的rating决定
+            if (contests[i].oldRating >= 1900) {
+                div1++;
+            } else {
+                div2++;
+            }
+        } else if (is_div2 && is_div3) {
+            // 联合比赛 Div.2+Div.3，根据选手当时的rating决定
+            if (contests[i].oldRating >= 1400) {
+                div2++;
+            } else {
+                div3++;
+            }
+        } else if (is_div1) {
+            div1++;
+        } else if (is_div2) {
+            div2++;
+        } else if (is_div3) {
+            div3++;
+        } else if (is_div4) {
+            div4++;
+        } else {
+            other++;
+        }
+        
+        // 分析月度参赛（统计所有比赛）
+        struct tm* tm = localtime(&contests[i].time);
+        int month = tm->tm_mon; // 0-11
+        monthly_contests[month]++;
     }
 // 第四部分：分析提交记录（通过题目数量，补题数量，不同难度等级的题目分布：分所有，年，半年，月四种情况）
     struct Submission subs[MAX_SUBMISSIONS];// 提交记录数组（用于存储从Codeforces API获取的提交记录，最多存储MAX_SUBMISSIONS条记录）
@@ -113,12 +167,25 @@ void generate_user_page(const char* handle, struct UserStats* stats, int single_
     fprintf(fp, ".period-btn:hover{background:#f0f4ff;border-color:#3a86ff;}\n");
     fprintf(fp, ".period-btn.active{background:#3a86ff;color:#fff;border-color:#3a86ff;}\n");
     fprintf(fp, ".section-title{font-size:1.4rem;font-weight:700;margin-bottom:10px;color:#212529;}\n");
+    fprintf(fp, ".pagination{display:flex;justify-content:center;gap:8px;margin-top:20px;}\n");
+    fprintf(fp, ".page-btn{padding:8px 16px;border-radius:6px;border:1px solid #e0e0e0;background:#fff;cursor:pointer;font-weight:600;transition:.3s;}\n");
+    fprintf(fp, ".page-btn:hover:not(:disabled){background:#f0f4ff;border-color:#3a86ff;}\n");
+    fprintf(fp, ".page-btn.active{background:#3a86ff;color:#fff;border-color:#3a86ff;}\n");
+    fprintf(fp, ".page-btn:disabled{opacity:.5;cursor:not-allowed;}\n");
+    fprintf(fp, ".detail-btn{padding:6px 12px;border-radius:4px;border:1px solid #3a86ff;background:#fff;color:#3a86ff;cursor:pointer;font-size:12px;font-weight:600;transition:.3s;}\n");
+    fprintf(fp, ".detail-btn:hover{background:#f0f4ff;}\n");
+    fprintf(fp, ".detail-content{padding:12px 16px;background:#f8f9fb;border-radius:8px;margin-top:8px;}\n");
+    fprintf(fp, ".detail-item{display:flex;margin-bottom:8px;}\n");
+    fprintf(fp, ".detail-item:last-child{margin-bottom:0;}\n");
+    fprintf(fp, ".detail-label{font-weight:600;color:#666;margin-right:8px;min-width:80px;}\n");
+    fprintf(fp, ".detail-value{color:#212529;font-family:monospace;}\n");
     fprintf(fp, "</style></head><body>\n");
     // 页面结构（生成HTML页面的主体结构，包括固定顶部导航栏、用户信息卡片、Rating变化趋势图表、题目难度分布图表和比赛记录表格）
     fprintf(fp, "<header><nav class='container'><div class='logo'>CF Analyzer</div><ul class='nav-links'>");
     fprintf(fp, "<li><a href='#overview'>概览</a></li>");
     fprintf(fp, "<li><a href='#rating'>Rating</a></li>");
     fprintf(fp, "<li><a href='#problems'>题目分析</a></li>");
+    fprintf(fp, "<li><a href='#participation'>参赛详情</a></li>");
     fprintf(fp, "<li><a href='#contests'>比赛记录</a></li>");
     if (!single_mode) {   // 如果不是单用户模式，添加返回列表的链接
         fprintf(fp, "<li><a href='index.html' class='period-btn'>返回列表</a></li>");
@@ -150,9 +217,20 @@ void generate_user_page(const char* handle, struct UserStats* stats, int single_
     fprintf(fp, "</div>\n");
     fprintf(fp, "<div id='problemChart' class='chart-box'></div>\n");
     fprintf(fp, "</section>\n");
+    // 参赛详情部分 - 包含Div参赛比例和月度参赛图表
+    fprintf(fp, "<section id='participation' class='card'>\n");
+    fprintf(fp, "<h2 class='section-title'>参赛详情</h2>\n");
+    fprintf(fp, "<div class='period-buttons'>\n");
+    fprintf(fp, "<button class='period-btn active' onclick='switchParticipationChart(0)'>Div参赛比例</button>\n");
+    fprintf(fp, "<button class='period-btn' onclick='switchParticipationChart(1)'>月度参赛</button>\n");
+    fprintf(fp, "</div>\n");
+    fprintf(fp, "<div id='participationChart' class='chart-box'></div>\n");
+    fprintf(fp, "</section>\n");
        // 比赛记录表格（生成一个HTML表格，用于展示用户的比赛记录，包括比赛名称、时间、旧Rating、新Rating、排名、Rating变化、比赛AC数量和补题数量）
-    fprintf(fp, "<section id='contests' class='card'><h2 class='section-title'>比赛记录</h2><table>\n");
-    fprintf(fp, "<tr><th>比赛</th><th>时间</th><th>旧 Rating</th><th>新 Rating</th><th>排名</th><th>Δ</th><th>比赛 AC</th><th>补题</th></tr>\n");
+    fprintf(fp, "<section id='contests' class='card'><h2 class='section-title'>比赛记录</h2>\n");
+    fprintf(fp, "<table id='contestTable'><thead>\n");
+    fprintf(fp, "<tr><th>比赛</th><th>时间</th><th>旧 Rating</th><th>新 Rating</th><th>排名</th><th>Δ</th><th>比赛 AC</th><th>补题</th><th>补题详情</th></tr>\n");
+    fprintf(fp, "</thead><tbody>\n");
     for (int i = contest_cnt - 1; i >= 0; i--) {
         char date[32];
         strftime(date, sizeof(date), "%Y-%m-%d", localtime(&contests[i].time));
@@ -161,14 +239,21 @@ void generate_user_page(const char* handle, struct UserStats* stats, int single_
         char oc[20], nc[20];
         rating_color(contests[i].oldRating, oc);
         rating_color(contests[i].newRating, nc);
-        fprintf(fp, "<tr><td>%s</td><td>%s</td>", contests[i].name, date);
+        fprintf(fp, "<tr class='contest-row'><td>%s</td><td>%s</td>", contests[i].name, date);
         fprintf(fp, "<td style='color:%s;font-weight:700'>%d</td>", oc, contests[i].oldRating);
         fprintf(fp, "<td style='color:%s;font-weight:700'>%d</td>", nc, contests[i].newRating);
         fprintf(fp, "<td>%d</td>", contests[i].rank);
         fprintf(fp, "<td style='color:%s;font-weight:700'>%s%d</td>", delta >= 0 ? "#00a854" : "#e53935", sign, delta);
-        fprintf(fp, "<td>%d</td><td>%d</td></tr>\n", contests[i].contestAC, contests[i].practiceAC);
+        fprintf(fp, "<td>%d</td><td>%d</td>", contests[i].contestAC, contests[i].practiceAC);
+        fprintf(fp, "<td><button class='detail-btn' onclick='toggleDetail(%d)'>查看</button></td></tr>\n", i);
+        fprintf(fp, "<tr class='detail-row' id='detail-%d' style='display:none'><td colspan='9'><div class='detail-content'>\n", i);
+        fprintf(fp, "<div class='detail-item'><span class='detail-label'>赛中通过：</span><span class='detail-value'>%s</span></div>\n", contests[i].contestProblems[0] ? contests[i].contestProblems : "-");
+        fprintf(fp, "<div class='detail-item'><span class='detail-label'>赛后补题：</span><span class='detail-value'>%s</span></div>\n", contests[i].practiceProblems[0] ? contests[i].practiceProblems : "-");
+        fprintf(fp, "</div></td></tr>\n");
     }
-    fprintf(fp, "</table></section>\n</div>\n");
+    fprintf(fp, "</tbody></table>\n");
+    fprintf(fp, "<div class='pagination' id='contestPagination'></div>\n");
+    fprintf(fp, "</section>\n</div>\n");
     // JavaScript代码（生成HTML页面的内嵌JavaScript代码，用于初始化ECharts图表并设置图表选项，展示用户的Rating变化趋势和题目难度分布）
     fprintf(fp, "<script>\n");
          //画rating变化趋势图
@@ -229,11 +314,13 @@ void generate_user_page(const char* handle, struct UserStats* stats, int single_
     fprintf(fp, "function updateProblemChart(period) {\n"); // （函数）更新题目难度分布图表（根据选择的时间段，更新图表的数据和标题，展示对应时间范围内的题目难度分布）
     fprintf(fp, "  problemChart.setOption({\n");            // 设置图表选项
     fprintf(fp, "    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },\n");
-    fprintf(fp, "    grid: { left: 40, right: 20, top: 20, bottom: 40 },\n");
+    fprintf(fp, "    grid: { left: 50, right: 20, top: 30, bottom: 60 },\n");
     fprintf(fp, "    xAxis: {\n");
     fprintf(fp, "      type: 'category',\n");
     fprintf(fp, "      data: difficultyLabels,\n");
-    fprintf(fp, "      name: '题目难度'\n");
+    fprintf(fp, "      name: '题目难度',\n");
+    fprintf(fp, "      nameLocation: 'middle',\n");
+    fprintf(fp, "      nameGap: 35\n");
     fprintf(fp, "    },\n");
     fprintf(fp, "    yAxis: {\n");
     fprintf(fp, "      type: 'value',\n");
@@ -266,6 +353,93 @@ void generate_user_page(const char* handle, struct UserStats* stats, int single_
     fprintf(fp, "  });\n");
     fprintf(fp, "}\n");
     fprintf(fp, "switchPeriod(0);\n");                     // 默认显示全部时间段的题目难度分布
+    // 参赛详情图表初始化
+    fprintf(fp, "const participationChart = echarts.init(document.getElementById('participationChart'));\n");
+    // Div数据 - 只生成数量大于0的类别
+    fprintf(fp, "const divPieData = [\n");
+    int first = 1;
+    if (div1 > 0) {
+        if (!first) fprintf(fp, ",\n");
+        fprintf(fp, "  { value: %d, name: 'Div 1' }", div1);
+        first = 0;
+    }
+    if (div2 > 0) {
+        if (!first) fprintf(fp, ",\n");
+        fprintf(fp, "  { value: %d, name: 'Div 2' }", div2);
+        first = 0;
+    }
+    if (div3 > 0) {
+        if (!first) fprintf(fp, ",\n");
+        fprintf(fp, "  { value: %d, name: 'Div 3' }", div3);
+        first = 0;
+    }
+    if (div4 > 0) {
+        if (!first) fprintf(fp, ",\n");
+        fprintf(fp, "  { value: %d, name: 'Div 4' }", div4);
+        first = 0;
+    }
+    if (other > 0) {
+        if (!first) fprintf(fp, ",\n");
+        fprintf(fp, "  { value: %d, name: '其他' }", other);
+        first = 0;
+    }
+    fprintf(fp, "\n];\n");
+    // 生成月份标签（1月到12月）
+    fprintf(fp, "const monthLabels = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];\n");
+    fprintf(fp, "const monthData = [%d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d];\n", 
+            monthly_contests[0], monthly_contests[1], monthly_contests[2], monthly_contests[3], 
+            monthly_contests[4], monthly_contests[5], monthly_contests[6], monthly_contests[7], 
+            monthly_contests[8], monthly_contests[9], monthly_contests[10], monthly_contests[11]);
+    fprintf(fp, "let currentParticipationChart = 0;\n");
+    fprintf(fp, "function updateParticipationChart(type) {\n");
+    fprintf(fp, "  participationChart.clear();\n");
+    fprintf(fp, "  if (type === 0) {\n"); // Div 饼图
+    fprintf(fp, "    participationChart.setOption({\n");
+    fprintf(fp, "      title: { text: 'Div 参赛比例', left: 'center' },\n");
+    fprintf(fp, "      tooltip: { trigger: 'item' },\n");
+    fprintf(fp, "      legend: { orient: 'vertical', left: 'left' },\n");
+    fprintf(fp, "      series: [{\n");
+    fprintf(fp, "        name: '参赛次数',\n");
+    fprintf(fp, "        type: 'pie',\n");
+    fprintf(fp, "        radius: '50%%',\n");
+    fprintf(fp, "        data: divPieData,\n");
+    fprintf(fp, "        label: {\n");
+    fprintf(fp, "          show: true,\n");
+    fprintf(fp, "          formatter: '{b}: {c}次 ({d}%%)'\n");
+    fprintf(fp, "        },\n");
+    fprintf(fp, "        emphasis: { itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0, 0, 0, 0.5)' } }\n");
+    fprintf(fp, "      }]\n");
+    fprintf(fp, "    });\n");
+    fprintf(fp, "  } else {\n"); // 月度柱状图
+    fprintf(fp, "    participationChart.setOption({\n");
+    fprintf(fp, "      title: { text: '比赛次数分布', left: 'center' },\n");
+    fprintf(fp, "      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },\n");
+    fprintf(fp, "      grid: { left: '3%%', right: '4%%', bottom: '3%%', containLabel: true },\n");
+    fprintf(fp, "      xAxis: { type: 'category', data: monthLabels, axisLabel: { rotate: 45 } },\n");
+    fprintf(fp, "      yAxis: { type: 'value', name: '参赛次数', min: 0 },\n");
+    fprintf(fp, "      series: [{\n");
+    fprintf(fp, "        name: '参赛次数',\n");
+    fprintf(fp, "        type: 'bar',\n");
+    fprintf(fp, "        data: monthData,\n");
+    fprintf(fp, "        itemStyle: {\n");
+    fprintf(fp, "          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [\n");
+    fprintf(fp, "            { offset: 0, color: '#3a86ff' },\n");
+    fprintf(fp, "            { offset: 1, color: '#8338ec' }\n");
+    fprintf(fp, "          ]),\n");
+    fprintf(fp, "          borderRadius: [6, 6, 0, 0]\n");
+    fprintf(fp, "        }\n");
+    fprintf(fp, "      }]\n");
+    fprintf(fp, "    });\n");
+    fprintf(fp, "  }\n");
+    fprintf(fp, "}\n");
+    fprintf(fp, "function switchParticipationChart(type) {\n");
+    fprintf(fp, "  currentParticipationChart = type;\n");
+    fprintf(fp, "  updateParticipationChart(type);\n");
+    fprintf(fp, "  const buttons = document.querySelectorAll('#participation .period-btn');\n");
+    fprintf(fp, "  buttons.forEach(btn => btn.classList.remove('active'));\n");
+    fprintf(fp, "  buttons[type].classList.add('active');\n");
+    fprintf(fp, "}\n");
+    fprintf(fp, "updateParticipationChart(0);\n"); // 默认显示 Div 饼图
     fprintf(fp, "document.querySelectorAll('a[href^=\"#\"]').forEach(a => {\n"); // 平滑滚动（为页面内的锚点链接添加点击事件监听，实现平滑滚动效果，提升用户体验）
     fprintf(fp, "  a.addEventListener('click', e => {\n");
     fprintf(fp, "    e.preventDefault();\n");
@@ -275,7 +449,53 @@ void generate_user_page(const char* handle, struct UserStats* stats, int single_
     fprintf(fp, "window.addEventListener('resize', () => {\n");// 实现自适应屏幕窗口功能
     fprintf(fp, "  ratingChart.resize();\n");             
     fprintf(fp, "  problemChart.resize();\n");
+    fprintf(fp, "  participationChart.resize();\n");
     fprintf(fp, "});\n");
+    fprintf(fp, "const contestRowsPerPage = 40;\n");
+    fprintf(fp, "let contestCurrentPage = 1;\n");
+    fprintf(fp, "function renderContestPagination() {\n");
+    fprintf(fp, "  const rows = document.querySelectorAll('.contest-row');\n");
+    fprintf(fp, "  const totalRows = rows.length;\n");
+    fprintf(fp, "  const totalPages = Math.ceil(totalRows / contestRowsPerPage);\n");
+    fprintf(fp, "  const pagination = document.getElementById('contestPagination');\n");
+    fprintf(fp, "  pagination.innerHTML = '';\n");
+    fprintf(fp, "  if (totalPages <= 1) return;\n");
+    fprintf(fp, "  const prevBtn = document.createElement('button');\n");
+    fprintf(fp, "  prevBtn.textContent = '上一页';\n");
+    fprintf(fp, "  prevBtn.className = 'page-btn';\n");
+    fprintf(fp, "  prevBtn.disabled = contestCurrentPage === 1;\n");
+    fprintf(fp, "  prevBtn.onclick = () => { if (contestCurrentPage > 1) { contestCurrentPage--; showContestPage(); document.getElementById('contests').scrollIntoView({ behavior: 'smooth' }); } };\n");
+    fprintf(fp, "  pagination.appendChild(prevBtn);\n");
+    fprintf(fp, "  for (let i = 1; i <= totalPages; i++) {\n");
+    fprintf(fp, "    const pageBtn = document.createElement('button');\n");
+    fprintf(fp, "    pageBtn.textContent = i;\n");
+    fprintf(fp, "    pageBtn.className = 'page-btn' + (i === contestCurrentPage ? ' active' : '');\n");
+    fprintf(fp, "    pageBtn.onclick = () => { contestCurrentPage = i; showContestPage(); document.getElementById('contests').scrollIntoView({ behavior: 'smooth' }); };\n");
+    fprintf(fp, "    pagination.appendChild(pageBtn);\n");
+    fprintf(fp, "  }\n");
+    fprintf(fp, "  const nextBtn = document.createElement('button');\n");
+    fprintf(fp, "  nextBtn.textContent = '下一页';\n");
+    fprintf(fp, "  nextBtn.className = 'page-btn';\n");
+    fprintf(fp, "  nextBtn.disabled = contestCurrentPage === totalPages;\n");
+    fprintf(fp, "  nextBtn.onclick = () => { if (contestCurrentPage < totalPages) { contestCurrentPage++; showContestPage(); document.getElementById('contests').scrollIntoView({ behavior: 'smooth' }); } };\n");
+    fprintf(fp, "  pagination.appendChild(nextBtn);\n");
+    fprintf(fp, "}\n");
+    fprintf(fp, "function showContestPage() {\n");
+    fprintf(fp, "  const rows = document.querySelectorAll('.contest-row');\n");
+    fprintf(fp, "  const detailRows = document.querySelectorAll('.detail-row');\n");
+    fprintf(fp, "  const start = (contestCurrentPage - 1) * contestRowsPerPage;\n");
+    fprintf(fp, "  const end = start + contestRowsPerPage;\n");
+    fprintf(fp, "  rows.forEach((row, idx) => { row.style.display = (idx >= start && idx < end) ? '' : 'none'; });\n");
+    fprintf(fp, "  detailRows.forEach((row, idx) => { row.style.display = (idx >= start && idx < end) ? row.style.display : 'none'; });\n");
+    fprintf(fp, "  renderContestPagination();\n");
+    fprintf(fp, "}\n");
+    fprintf(fp, "function toggleDetail(index) {\n");
+    fprintf(fp, "  const detailRow = document.getElementById('detail-' + index);\n");
+    fprintf(fp, "  if (detailRow) {\n");
+    fprintf(fp, "    detailRow.style.display = detailRow.style.display === 'none' ? '' : 'none';\n");
+    fprintf(fp, "  }\n");
+    fprintf(fp, "}\n");
+    fprintf(fp, "showContestPage();\n");
     fprintf(fp, "</script>\n");
     fprintf(fp, "</body></html>\n");
     fclose(fp);
@@ -283,6 +503,7 @@ void generate_user_page(const char* handle, struct UserStats* stats, int single_
 cleanup:
     if (mem.data) free(mem.data);
     if (curl) curl_easy_cleanup(curl);
+    return 0;
 }
 
 void generate_index_page(struct UserStats* users, int user_cnt) {

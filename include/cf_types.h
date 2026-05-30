@@ -11,6 +11,7 @@ struct Memory {
 };
 
 struct Contest {
+    int id;
     char name[128];
     long long time;
     int oldRating;
@@ -18,13 +19,17 @@ struct Contest {
     int rank;
     int contestAC;
     int practiceAC;
+    char contestProblems[64];
+    char practiceProblems[64];
 };
 
 struct Submission {
+    int contestId;
     char verdict[32];
     char participantType[32];
     long long creationTimeSeconds;
     int problemRating;
+    char problemIndex[8];
 };
 
 struct UserStats {
